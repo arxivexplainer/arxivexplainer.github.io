@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>arXiv Paper Viewer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.9.359/pdf.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+        }
+        #paper-form {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        #pdf-viewer {
+            width: 100%;
+            height: 800px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            border-radius: 10px;
+            position: relative;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .page-container {
+            position: relative;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: center;
+        }
+        .page-canvas {
+            display: block;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .text-layer {
+            position: absolute;
+            left: 0;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            overflow: hidden;
+            opacity: 0.2;
+            line-height: 1.0;
+        }
+        .text-layer > span {
+            color: transparent;
+            position: absolute;
+            white-space: pre;
+            cursor: text;
+            transform-origin: 0% 0%;
+        }
+        #explain-popup {
+            position: absolute;
+            background-color: white;
+            border: 1px solid #ddd;
+            padding: 5px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            display: none;
+        }
+        #explanation {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: white;
+            border: 1px solid #ddd;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            max-width: 80%;
+            max-height: 80%;
+            overflow-y: auto;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>arXiv Paper Viewer</h1>
+    <form id="paper-form">
+        <input type="text" id="arxiv-id" placeholder="Enter arXiv ID">
+        <button type="submit">Fetch Paper</button>
+    </form>
+    <div id="pdf-viewer"></div>
+    <div id="explain-popup">
+        <button id="explain-button">Explain</button>
+    </div>
+    <div id="explanation"></div>
+
+    <script>
+        document.getElementById('paper-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const arxivId = document.getElementById('arxiv-id').value;
+
+            fetch('/fetch_paper', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `arxiv_id=${encodeURIComponent(arxivId)}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                const container = document.getElementById('pdf-viewer');
+                container.innerHTML = ''; // Clear previous content
+
+                pdfjsLib.getDocument({data: atob(data.pdf_data.split(',')[1])}).promise.then(function(pdf) {
+                    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                        pdf.getPage(pageNum).then(function(page) {
+                            const scale = 1.5;
+                            const viewport = page.getViewport({scale: scale});
+
+                            const pageContainer = document.createElement('div');
+                            pageContainer.className = 'page-container';
+                            pageContainer.style.width = viewport.width + 'px';
+                            pageContainer.style.height = viewport.height + 'px';
+                            container.appendChild(pageContainer);
+
+                            // Create canvas
+                            const canvas = document.createElement('canvas');
+                            canvas.className = 'page-canvas';
+                            const context = canvas.getContext('2d');
+                            canvas.height = viewport.height;
+                            canvas.width = viewport.width;
+                            pageContainer.appendChild(canvas);
+
+                            // Create text layer div
+                            const textLayerDiv = document.createElement('div');
+                            textLayerDiv.className = 'text-layer';
+                            textLayerDiv.style.width = viewport.width + 'px';
+                            textLayerDiv.style.height = viewport.height + 'px';
+                            pageContainer.appendChild(textLayerDiv);
+
+                            // Render page
+                            page.render({canvasContext: context, viewport: viewport});
+
+                            // Add text to text layer
+                            page.getTextContent().then(function(textContent) {
+                                textContent.items.forEach(function(textItem) {
+                                    const tx = pdfjsLib.Util.transform(
+                                        pdfjsLib.Util.transform(viewport.transform, textItem.transform),
+                                        [1, 0, 0, -1, 0, 0]
+                                    );
+                                    const style = textContent.styles[textItem.fontName];
+                                    const fontSize = Math.sqrt((tx[2] * tx[2]) + (tx[3] * tx[3]));
+
+                                    const textSpan = document.createElement('span');
+                                    textSpan.textContent = textItem.str;
+                                    textSpan.style.fontSize = `${fontSize}px`;
+                                    textSpan.style.fontFamily = style.fontFamily;
+                                    textSpan.style.left = `${tx[4]}px`;
+                                    textSpan.style.top = `${tx[5]}px`;
+                                    textSpan.style.transform = `scaleY(${-tx[3]/fontSize})`;
+                                    textSpan.style.position = 'absolute';
+
+                                    textLayerDiv.appendChild(textSpan);
+                                });
+                            });
+                        });
+                    }
+                });
+            });
+        });
+
+        // Event listener for text selection
+        document.addEventListener('mouseup', function(event) {
+            const selection = window.getSelection();
+            const selectedText = selection.toString().trim();
+            if (selectedText) {
+                // Show explain popup
+                const popup = document.getElementById('explain-popup');
+                popup.style.display = 'block';
+                popup.style.left = `${event.pageX}px`;
+                popup.style.top = `${event.pageY}px`;
+            } else {
+                // Hide explain popup if no text is selected
+                document.getElementById('explain-popup').style.display = 'none';
+            }
+        });
+
+        // Event listener for explain button
+        document.getElementById('explain-button').addEventListener('click', function() {
+            const selectedText = window.getSelection().toString().trim();
+            const context = document.getElementById('pdf-viewer').textContent;
+
+            fetch('/explain', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    selected_text: selectedText,
+                    context: context.substring(0, 500) // Send first 500 characters as context
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                const explanationDiv = document.getElementById('explanation');
+                explanationDiv.textContent = data.explanation;
+                explanationDiv.style.display = 'block';
+            });
+
+            // Hide the explain popup
+            document.getElementById('explain-popup').style.display = 'none';
+        });
+
+        // Close explanation when clicking outside
+        document.addEventListener('click', function(event) {
+            const explanationDiv = document.getElementById('explanation');
+            if (event.target !== explanationDiv && !explanationDiv.contains(event.target)) {
+                explanationDiv.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>
